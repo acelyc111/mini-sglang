@@ -189,7 +189,7 @@ def generate_prompt(tokenizer: Any, n: int) -> str:
     #    随机序列更容易被 tokenizer.decode 处理，并能更稳定地通过后续的 tokenizer.encode 校验长度。
     # 3. 防止溢出：确保随机生成的 ID 处于词表的“安全区”，避免因不同分词器实现差异导致的索引越界。
     vocab_size = tokenizer.vocab_size // 2
-    token_ids = [random.randint(0, vocab_size) for _ in range(n - 1)]
+    token_ids = [random.randint(0, vocab_size) for _ in range(n)]
 
     for _ in range(64):
         prompt = tokenizer.decode(token_ids)
