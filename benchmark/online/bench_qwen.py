@@ -38,7 +38,7 @@ async def main():
     random.seed(42)  # reproducibility
     PORT = 1919
     N = 1000
-    SCALES = [0.4, 0.5, 0.6, 0.7, 0.8, 1.6]  # from fast to slow
+    SCALES = [0.4, 0.5, 0.6, 0.7, 0.8, 1.6]  # from fast to slow. 也就是 QPS 从高到低，并发也从高到低
     async with OpenAI(base_url=f"http://127.0.0.1:{PORT}/v1", api_key="") as client:
         MODEL = await get_model_name(client)
         tokenizer = AutoTokenizer.from_pretrained(MODEL)

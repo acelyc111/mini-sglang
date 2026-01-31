@@ -491,6 +491,7 @@ def scale_traces(
     traces: List[BenchmarkTrace],
     scale: float,
 ) -> List[BenchmarkTrace]:
+    # 根据原始 traces 中的 timestamp 最小值进行重排序，然后按比例缩放时间戳
     min_tic = min(trace.timestamp for trace in traces)
     return sorted(
         [
