@@ -28,6 +28,9 @@ async def main():
                 length = random.randint(1, MAX_INPUT)
                 message = generate_prompt(tokenizer, length)
                 result.append(message)
+                # 让出当前协程的执行权，允许事件循环处理其他任务。
+                # 虽然实际不会延迟任何时间，但它会将当前协程挂起，从而为其他协程提供运行的机会。
+                # 这通常用于避免长时间运行的协程阻塞事件循环，确保程序的异步行为更加高效。
                 await asyncio.sleep(0)
             return result
 
