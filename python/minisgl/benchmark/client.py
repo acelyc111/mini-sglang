@@ -182,6 +182,12 @@ def make_console(num_requests: int, sum_output_length: int, use_pbar: bool = Tru
 
 def generate_prompt(tokenizer: Any, n: int) -> str:
     """Generate a prompt of approximately `n` tokens using the provided tokenizer."""
+    # 在 generate_prompt 函数中将 vocab_size 除以 2 通常是一种启发式（heuristic）策略，主要原因如下：
+    # 1. 避免特殊 Token：许多分词器（如 BPE）的词表后端部分通常包含特殊 Token、控制字符或保留位。
+    #    这些 Token 在解码回字符串时可能会引发异常或产生不可预见的行为。
+    # 2. 提高解码稳定性：较低索引的 ID 通常对应更常见的字符或子词。通过限制采样范围，可以确保生成的
+    #    随机序列更容易被 tokenizer.decode 处理，并能更稳定地通过后续的 tokenizer.encode 校验长度。
+    # 3. 防止溢出：确保随机生成的 ID 处于词表的“安全区”，避免因不同分词器实现差异导致的索引越界。
     vocab_size = tokenizer.vocab_size // 2
     token_ids = [random.randint(0, vocab_size) for _ in range(n - 1)]
 
@@ -190,9 +196,14 @@ def generate_prompt(tokenizer: Any, n: int) -> str:
         token_ids = tokenizer.encode(prompt, add_special_tokens=False)
         if len(token_ids) == n:
             return prompt
+
+        # - 某些随机 token ID decode 后产生的字符在重新 encode 时被合并成更少的 token
+        # - 特殊字符或无效 token 在 decode 时被忽略或替换
         if len(token_ids) < n:
             need = n - len(token_ids)
             token_ids.extend([random.randint(0, vocab_size) for _ in range(need)])
+        # - 单个 token decode 成多字符字符串，重新 encode 时被拆分成多个 token
+        # - BPE 分词的非确定性：同一字符串可能有不同的分词方式
         else:
             token_ids = token_ids[:n]
 
