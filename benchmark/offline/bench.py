@@ -13,7 +13,7 @@ def main():
     num_seqs = 256
     max_input_len = 1024
     max_ouput_len = 1024
-    model = "Qwen/Qwen3-0.6B"
+    model = "/mnt/aie-shared-models-n-datasets/models/Qwen3-0.6B/"
 
     # align the hyperparameters
     tokenizer = AutoTokenizer.from_pretrained(model)

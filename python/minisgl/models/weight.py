@@ -8,8 +8,10 @@ import safetensors
 import torch
 from huggingface_hub import snapshot_download
 from minisgl.distributed import get_tp_info
-from minisgl.utils import divide_up
+from minisgl.utils import divide_up, init_logger
 from tqdm.asyncio import tqdm
+
+logger = init_logger(__name__)
 
 
 class DisabledTqdm(tqdm):
@@ -34,6 +36,7 @@ def _shard_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Te
         ".down_proj",
     ]
     for key, value in state_dict.items():
+        logger.debug_rank0(f"{key=}")
         if any(key.count(sub) for sub in SPLIT_DIM_0_LIST):
             shard_state_dict[key] = value.chunk(n, dim=0)[r]
         elif any(key.count(sub) for sub in SPLIT_DIM_1_LIST):
