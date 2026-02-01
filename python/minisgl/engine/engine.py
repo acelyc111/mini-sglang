@@ -53,6 +53,8 @@ class Engine:
 
         # load model and determine number of pages
         set_rope_device(self.device)
+        # meta 设备既不是 CPU 也不是 GPU；它是 PyTorch 的一种“虚拟设备”，只记录张量/模块的形状与 dtype，不分配实际内存或算力。
+        # 通常用来快速构建模型结构或做延迟加载，之后会再把权重迁移到真实设备（CPU/GPU）上。
         with torch.device("meta"), torch_dtype(config.dtype):
             self.model = create_model(config.model_path, config.model_config)
         self.model.load_state_dict(self._load_weight_state_dict(config))

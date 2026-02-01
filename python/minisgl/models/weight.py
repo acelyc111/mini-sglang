@@ -24,20 +24,26 @@ def _shard_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Te
     tp_info = get_tp_info()
     r = tp_info.rank
     n = tp_info.size
-    SPLIT_DIM_0_LIST = [
+    SPLIT_DIM_0_LIST = [  # 横切
         ".q_proj",
         ".k_proj",
         ".v_proj",
         ".gate_proj",
         ".up_proj",
     ]
-    SPLIT_DIM_1_LIST = [
+    SPLIT_DIM_1_LIST = [  # 竖切
         ".o_proj",
         ".down_proj",
     ]
     for key, value in state_dict.items():
         logger.debug_rank0(f"{key=}")
+        # e.g. key='model.layers.9.self_attn.q_proj.weight'
         if any(key.count(sub) for sub in SPLIT_DIM_0_LIST):
+            # value.chunk(n, dim=0):
+            #   1. 沿着第 0 维把张量切成 n 份（n = tp_size）
+            #     - 如果第 0 维长度能被 n 整除，就等分成 n 片
+            #     - 如果不能整除，则会尽量平均分: 前面的若干片会比后面的多 1 行
+            #   2. 然后 `[r]` 取第 `r` 片（r = tp_rank`），也就是当前 TP rank 对应的分片
             shard_state_dict[key] = value.chunk(n, dim=0)[r]
         elif any(key.count(sub) for sub in SPLIT_DIM_1_LIST):
             shard_state_dict[key] = value.chunk(n, dim=1)[r]
