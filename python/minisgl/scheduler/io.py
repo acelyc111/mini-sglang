@@ -74,19 +74,31 @@ class SchedulerIOMixin:
         raise NotImplementedError("should be implemented")
 
     def sync_all_ranks(self) -> None:
+        # 在 CPU 侧对所有张量并行（TP）进程做一个同步屏障。
+        # 所有参与该 ProcessGroup 的 rank 都会阻塞在 barrier，直到全部到达后才继续执行，确保
+        # 各 rank 的执行进度一致（不会有某些 rank 先往下跑）。
+        # 在这个文件里它是用于让 scheduler 的多 rank 在关键点保持同步。
         self.tp_cpu_group.barrier().wait()
 
     def _recv_msg_single_rank(self, blocking: bool = False) -> List[BaseBackendMsg]:
         pending_msgs: List[BaseBackendMsg] = []
+
+        # blocking=True 表示“至少拿到一条消息再返回”。
+        # 如果当前没有消息，会先让调度器执行空闲时的处理逻辑（比如做一些后台维护），然后阻塞等待来自 tokenizer 的第一条消息。
         if blocking:
             self.run_when_idle()
             pending_msgs.append(self._recv_from_tokenizer.get())
+
+        # 之后把队列里剩余的消息一次性取光，避免频繁地进入函数调度。
+        # 这里是非阻塞读取：如果队列空了就停止。
         while not self._recv_from_tokenizer.empty():
             pending_msgs.append(self._recv_from_tokenizer.get())
         return pending_msgs
 
     def _recv_msg_multi_rank0(self, blocking: bool = False) -> List[BaseBackendMsg]:
         pending_msgs: List[BaseBackendMsg] = []
+
+        # 如果当前没有消息，会先让调度器执行空闲时的处理逻辑 run_when_idle，然后阻塞等待来自 tokenizer 的第一条消息。
         if blocking:
             self.run_when_idle()
             raw = self._recv_from_tokenizer.get_raw()
