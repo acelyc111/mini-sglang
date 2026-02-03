@@ -59,27 +59,36 @@ def _shard_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Te
 
 
 def _merge_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    # 将 HF 拆分保存的权重合并为 minisgl 内部使用的命名格式
+    # 1) q/k/v 合并为 qkv
+    # 2) gate/up 合并为 gate_up
     filtered_state_dict: Dict[str, torch.Tensor] = {}
     for key in list(state_dict.keys()):
         if key.count(".q_proj"):
+            # 将同层的 q/k/v 按 dim=0 拼接成 qkv
             q_proj = state_dict[key]
             k_proj = state_dict[key.replace(".q_proj", ".k_proj")]
             v_proj = state_dict[key.replace(".q_proj", ".v_proj")]
             new_key = key.replace(".q_proj", ".qkv_proj")
             filtered_state_dict[new_key] = torch.cat([q_proj, k_proj, v_proj], dim=0)
+            # 原始 q/k/v 作为临时键，合并后删除
             del state_dict[key]
             del state_dict[key.replace(".q_proj", ".k_proj")]
             del state_dict[key.replace(".q_proj", ".v_proj")]
         elif key.count(".gate_proj"):
+            # 将 gate/up 按 dim=0 拼接成 gate_up
             gate_proj = state_dict[key]
             up_proj = state_dict[key.replace(".gate_proj", ".up_proj")]
             new_key = key.replace(".gate_proj", ".gate_up_proj")
             filtered_state_dict[new_key] = torch.cat([gate_proj, up_proj], dim=0)
+            # 原始 gate/up 合并后删除
             del state_dict[key]
             del state_dict[key.replace(".gate_proj", ".up_proj")]
         elif key.count(".k_proj") or key.count(".v_proj") or key.count("up_proj"):
+            # 这些键会在 qkv / gate_up 分支中被合并处理，这里跳过避免重复写入
             continue
         else:
+            # 其他权重保持不变
             filtered_state_dict[key] = state_dict[key]
     return filtered_state_dict
 
