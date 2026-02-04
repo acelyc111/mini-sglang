@@ -64,6 +64,7 @@ def init_pynccl(
             group=tp_cpu_group,
         )
     else:
+        # 会被 rank 0 的 id_list 内容覆盖
         id_list = [None]
         torch.distributed.broadcast_object_list(
             id_list,
@@ -71,6 +72,7 @@ def init_pynccl(
             group=tp_cpu_group,
         )
 
+    # 调用后所有 rank 的 `id_list[0]` 都会变成 rank 0 生成的 NCCL unique id
     nccl_id = id_list[0]
     assert not nccl_id is None, f"Failed to get NCCL unique ID on {tp_rank = }"
 

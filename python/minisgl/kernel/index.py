@@ -39,6 +39,7 @@ def indexing(
         output = weights.new_empty(indices.shape[0], weights.shape[1])
 
     element_size = weights.shape[1] * weights.element_size()
+    # 1024/2048 是硬件友好尺寸（对齐/向量化/warp 访问）
     if element_size % 2048 == 0:
         num_splits = 4
     elif element_size % 1024 == 0:
