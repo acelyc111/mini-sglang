@@ -5,9 +5,12 @@ from typing import TYPE_CHECKING, Tuple
 import torch
 from minisgl.core import get_global_ctx
 from minisgl.layers import BaseOP, OPList, ParallelLMHead, RMSNormFused, VocabParallelEmbedding
-from minisgl.utils import nvtx_annotate
+from minisgl.utils import init_logger, nvtx_annotate
 
 from .base import BaseLLMModel
+
+logger = init_logger(__name__)
+
 from .utils import GatedMLP as Qwen3MLP
 from .utils import RopeAttn as Qwen3Attn
 
@@ -34,10 +37,27 @@ class Qwen3DecoderLayer(BaseOP):
     def forward(
         self, x: torch.Tensor, residual: torch.Tensor | None = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        def _log(
+            stage: str,
+            x: torch.Tensor,
+            residual: torch.Tensor | None = None,
+            log_residual: bool = True,
+        ):
+            if self._layer_id == 0:
+                msg = f"Layer {self._layer_id} {stage}: x={x.shape}"
+                if log_residual:
+                    msg += f", residual={residual.shape if residual is not None else None}"
+                logger.info_rank0(msg)
+
+        _log("input", x, residual)
         x, residual = self.input_layernorm.forward(x, residual)
+        _log("after input_layernorm", x, residual)
         x = self.self_attn.forward(x)
+        _log("after self_attn", x, log_residual=False)
         x, residual = self.post_attention_layernorm.forward(x, residual)
+        _log("after post_attn_layernorm", x, residual)
         x = self.mlp.forward(x)
+        _log("after mlp", x, log_residual=False)
         return x, residual
 
 
