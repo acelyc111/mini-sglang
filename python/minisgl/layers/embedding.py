@@ -33,7 +33,7 @@ class VocabParallelEmbedding(BaseOP):
 
     @nvtx_annotate("Embedding")
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        logger.info_rank0("VocabParallelEmbedding.forward input x.shape={}", x.shape)
+        logger.info_rank0(f"VocabParallelEmbedding.forward input x.shape={x.shape}")
         from minisgl.kernel import indexing
 
         y = indexing(
@@ -44,7 +44,7 @@ class VocabParallelEmbedding(BaseOP):
 
         y = self._comm.all_reduce(y) if self.tp_size > 1 else y
 
-        logger.info_rank0("VocabParallelEmbedding.forward input y.shape={}", y.shape)
+        logger.info_rank0(f"VocabParallelEmbedding.forward input y.shape={y.shape}")
 
         return y
 
