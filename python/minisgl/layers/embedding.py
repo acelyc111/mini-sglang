@@ -6,9 +6,11 @@ import torch
 import torch.nn.functional as F
 from minisgl.core import get_global_ctx
 from minisgl.distributed import DistributedCommunicator, get_tp_info
-from minisgl.utils import divide_up, nvtx_annotate
+from minisgl.utils import divide_up, init_logger, nvtx_annotate
 
 from .base import BaseOP
+
+logger = init_logger(__name__)
 
 
 class VocabParallelEmbedding(BaseOP):
@@ -31,6 +33,7 @@ class VocabParallelEmbedding(BaseOP):
 
     @nvtx_annotate("Embedding")
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        logger.info_rank0("VocabParallelEmbedding.forward input x.shape={}", x.shape)
         from minisgl.kernel import indexing
 
         y = indexing(
@@ -39,7 +42,11 @@ class VocabParallelEmbedding(BaseOP):
             vocab_range=self.vocab_range if self.tp_size > 1 else None,
         )
 
-        return self._comm.all_reduce(y) if self.tp_size > 1 else y
+        y = self._comm.all_reduce(y) if self.tp_size > 1 else y
+
+        logger.info_rank0("VocabParallelEmbedding.forward input y.shape={}", y.shape)
+
+        return y
 
 
 class ParallelLMHead(VocabParallelEmbedding):
