@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Protocol
 
 import torch
 from minisgl.utils import Registry, init_logger, is_sm90_supported, is_sm100_supported
+from minisgl.platforms import Platform
 
 from .base import BaseAttnBackend, BaseAttnMetadata, HybridBackend
 
@@ -25,6 +26,9 @@ SUPPORTED_ATTENTION_BACKENDS = Registry[BackendCreator]("Attention Backend")
 
 def resolve_auto_backend(config: ModelConfig) -> str:
     """Determine the best attention backend based on the GPU architecture and model."""
+    if not Platform.is_cuda():
+        return "torch"
+
     if is_sm100_supported():  # blackwell
         return "fi"
     elif is_sm90_supported():  # hopper
@@ -45,6 +49,13 @@ def create_fa_backend(config: ModelConfig, kvcache: BaseKVCache, page_table: tor
     from .fa import FlashAttentionBackend
 
     return FlashAttentionBackend(config, kvcache, page_table)
+
+
+@SUPPORTED_ATTENTION_BACKENDS.register("torch")
+def create_torch_backend(config: ModelConfig, kvcache: BaseKVCache, page_table: torch.Tensor):
+    from .torch_backend import TorchAttentionBackend
+
+    return TorchAttentionBackend(config, kvcache, page_table)
 
 
 def validate_backend(backend: str):

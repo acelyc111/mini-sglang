@@ -33,21 +33,34 @@ def _align_up_32(num: int) -> int:
     return (num + 31) // 32 * 32
 
 
+from minisgl.platforms import Platform
+
+
 class Engine:
     def __init__(self, config: EngineConfig):
         self.model_config = config.model_config
         set_tp_info(rank=config.tp_info.rank, size=config.tp_info.size)
 
-        assert not torch.cuda.is_initialized()
-        self.device = torch.device(f"cuda:{config.tp_info.rank}")
-        # 指定当前线程的默认设备（之后所有未明确指定设备的 CUDA 张量和操作都会在这个设备上执行）
-        torch.cuda.set_device(self.device)
-        self.stream = torch.cuda.Stream()
-        # 指定当前线程的默认流（之后所有未明确指定流的 CUDA 操作（如张量创建、内核启动等）都会在 self.stream 上执行）
-        torch.cuda.set_stream(self.stream)
+        if Platform.is_cuda():
+            assert not torch.cuda.is_initialized()
+            self.device = torch.device(f"cuda:{config.tp_info.rank}")
+            torch.cuda.set_device(self.device)
+        elif Platform.is_mps():
+            self.device = torch.device("mps")
+        else:
+            self.device = torch.device("cpu")
+
+        self.stream = Platform.Stream(device=self.device)
+        Platform.set_stream(self.stream)
         self.dtype = config.dtype
 
         self.tp_cpu_group = self._init_communication(config)
+
+        # Sync memory
+        Platform.synchronize()
+        Platform.empty_cache()
+        Platform.reset_peak_memory_stats(self.device)
+
         init_free_memory = self._sync_get_memory()[1]
         logger.info_rank0(f"Free memory before loading model: {mem_GB(init_free_memory)}")
 
@@ -110,15 +123,7 @@ class Engine:
 
     def _init_communication(self, config: EngineConfig) -> torch.distributed.ProcessGroup:
         # 这里的通信初始化是为 TP (tensor parallel) 建立必要的进程组。
-        # 两条分支分别对应：
-        # 1) 只有单卡或选择 pynccl 时：先 gloo 建默认组，再启用 pynccl 走 GPU 通信
-        #     - CPU 同步走 gloo，GPU 通信走 PyNCCL。
-        #     - 如果 PyNCCL 对本项目的通信模式做了更轻量的实现，可能会带来小幅收益。
-        #     - 但需要额外维护自定义通信栈，收益依赖实现质量。
-        # 2) 多卡且不使用 pynccl 时：直接用 NCCL 初始化默认组，再建 gloo 组做 CPU 同步
-        #     - GPU 通信走官方 NCCL，性能与稳定性通常最可靠。
-        #     - 通信路径更标准化，普遍情况下性能上不会吃亏，且兼容性更强。
-        if config.tp_info.size == 1 or config.use_pynccl:
+        if config.tp_info.size == 1 or config.use_pynccl or not Platform.is_cuda():
             # 使用 gloo 初始化全局默认进程组，方便 CPU 侧通信/同步。
             # 注意：即便是单卡也需要 init_process_group，后续 all_reduce 等 API 会依赖它。
             torch.distributed.init_process_group(
@@ -131,14 +136,16 @@ class Engine:
             # 直接复用 WORLD 作为 TP 的 CPU 通信组。
             tp_cpu_group = torch.distributed.group.WORLD
             assert tp_cpu_group is not None
-            # 计算一次 forward 过程中最大通信量（用于 pynccl 的内部 buffer 预分配）。
-            #   - max_forward_len: 可能的最大 token 数
-            #   - hidden_size * dtype.itemsize: 每 token 的字节数
-            max_bytes = (
-                config.max_forward_len * config.model_config.hidden_size * self.dtype.itemsize
-            )
-            # 在 gloo 组基础上启用 pynccl 通信（走 GPU path）。
-            enable_pynccl_distributed(config.tp_info, tp_cpu_group, max_bytes)
+
+            if Platform.is_cuda():
+                # 计算一次 forward 过程中最大通信量（用于 pynccl 的内部 buffer 预分配）。
+                #   - max_forward_len: 可能的最大 token 数
+                #   - hidden_size * dtype.itemsize: 每 token 的字节数
+                max_bytes = (
+                    config.max_forward_len * config.model_config.hidden_size * self.dtype.itemsize
+                )
+                # 在 gloo 组基础上启用 pynccl 通信（走 GPU path）。
+                enable_pynccl_distributed(config.tp_info, tp_cpu_group, max_bytes)
         else:
             # 多卡时使用 nccl 初始化默认进程组，NCCL 在 GPU 通信上性能最佳。
             torch.distributed.init_process_group(
@@ -190,9 +197,9 @@ class Engine:
     def _sync_get_memory(self) -> Tuple[int, int]:
         """Get the min and max free memory across TP ranks."""
         # 先同步并清理当前设备的显存状态，确保统计的是稳定、可复现的空闲量。
-        torch.cuda.synchronize(self.device)
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats(self.device)
+        Platform.synchronize()
+        Platform.empty_cache()
+        Platform.reset_peak_memory_stats(self.device)
         # 获取本 rank 的可用显存（字节）。
         free_memory = get_free_memory(self.device)
         # 用 [free, -free] 的形式打包，方便一次 all_reduce 得到全局最小/最大值。
@@ -218,7 +225,7 @@ class Engine:
         return min_free_memory, max_free_memory
 
     def forward_batch(self, batch: Batch, args: BatchSamplingArgs) -> ForwardOutput:
-        assert torch.cuda.current_stream() == self.stream
+        assert Platform.current_stream() == self.stream
         with self.ctx.forward_batch(batch):
             if self.graph_runner.can_use_cuda_graph(batch):
                 logits = self.graph_runner.replay(batch)
@@ -229,8 +236,11 @@ class Engine:
             req.complete_one()
 
         next_tokens_gpu = self.sampler.sample(logits[: batch.size], args).to(torch.int32)
-        next_tokens_cpu = next_tokens_gpu.to("cpu", non_blocking=True)
-        copy_done_event = torch.cuda.Event()
+        if Platform.is_mps():
+            next_tokens_cpu = next_tokens_gpu.to("cpu", non_blocking=False)
+        else:
+            next_tokens_cpu = next_tokens_gpu.to("cpu", non_blocking=True)
+        copy_done_event = Platform.Event()
         copy_done_event.record(self.stream)
         return ForwardOutput(next_tokens_gpu, next_tokens_cpu, copy_done_event)
 

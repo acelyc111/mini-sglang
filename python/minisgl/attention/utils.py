@@ -34,8 +34,14 @@ class BaseCaptureData:
 
 
 def make_positions(device: torch.device, reqs: List[Req]) -> torch.Tensor:
+    from minisgl.platforms import Platform
+
     needed_size = sum(req.extend_len for req in reqs)
-    indices_host = torch.empty(needed_size, dtype=torch.int32, pin_memory=True)
+    # pin_memory is only supported on CUDA. On MPS/CPU, use regular allocation.
+    if Platform.is_cuda():
+        indices_host = torch.empty(needed_size, dtype=torch.int32, pin_memory=True)
+    else:
+        indices_host = torch.empty(needed_size, dtype=torch.int32)
     offset = 0
     for req in reqs:
         length = req.extend_len
@@ -46,4 +52,10 @@ def make_positions(device: torch.device, reqs: List[Req]) -> torch.Tensor:
             out=indices_host[offset : offset + length],
         )
         offset += length
-    return indices_host.to(device, non_blocking=True)
+
+    result = indices_host.to(device, non_blocking=True)
+    if Platform.is_mps():
+        max_safe_index = 40960
+        result = torch.clamp(result, 0, max_safe_index)
+
+    return result

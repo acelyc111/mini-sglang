@@ -41,6 +41,9 @@ class ForwardInput(NamedTuple):
 ForwardData: TypeAlias = "Tuple[ForwardInput, ForwardOutput]"
 
 
+from minisgl.platforms import Platform
+
+
 class Scheduler(SchedulerIOMixin):
     def __init__(self, config: SchedulerConfig):
         from minisgl.engine import Engine
@@ -52,11 +55,11 @@ class Scheduler(SchedulerIOMixin):
         # use another stream to overlap metadata processing with computation
         self.device = self.engine.device
         # 在 self.device 上新建一个 CUDA stream（stream 是 GPU 上的任务队列，不同 stream 可以并发执行）。
-        self.stream = torch.cuda.Stream(device=self.device)
+        self.stream = Platform.Stream(device=self.device)
         # 创建一个 context，用于在需要切换 stream 时使用（使用时，通过 `with self.engine_stream_ctx:` 切换）。
-        self.engine_stream_ctx = torch.cuda.stream(self.engine.stream)
+        self.engine_stream_ctx = Platform.stream_context(self.engine.stream)
         # 把“当前默认 stream”切换到刚创建的 `self.stream`（后续 CUDA 操作会在这个 stream 上排队执行）。
-        torch.cuda.set_stream(self.stream)
+        Platform.set_stream(self.stream)
 
         # initialize other managers
         self.table_manager = TableManager(config.max_running_req, self.engine.page_table)
@@ -199,7 +202,11 @@ class Scheduler(SchedulerIOMixin):
         """
         STRIDE = self.token_pool.stride(0)
         needed_size = sum(end - begin for _, begin, end in ranges)
-        indices_host = torch.empty(needed_size, dtype=torch.int32, pin_memory=True)
+        # pin_memory is only supported on CUDA. On MPS/CPU, use regular allocation.
+        if Platform.is_cuda():
+            indices_host = torch.empty(needed_size, dtype=torch.int32, pin_memory=True)
+        else:
+            indices_host = torch.empty(needed_size, dtype=torch.int32)
         offset = 0
         for entry, begin, end in ranges:
             length = end - begin
@@ -278,7 +285,7 @@ class Scheduler(SchedulerIOMixin):
                 while True:
                     self.normal_loop()
         else:
-            assert torch.cuda.current_stream() == self.stream
+            assert Platform.current_stream() == self.stream
             data = None
             while True:
                 data = self.overlap_loop(data)

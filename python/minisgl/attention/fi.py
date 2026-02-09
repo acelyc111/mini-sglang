@@ -121,7 +121,15 @@ class FlashInferBackend(BaseAttnBackend):
         self.qo_head_local = divide_even(self.config.num_qo_heads, tp_size)
         self.kv_head_local = divide_even(self.config.num_kv_heads, tp_size)
 
-        self.cached_ones_cpu: torch.Tensor = torch.tensor([], dtype=torch.int32, pin_memory=True)
+        # pin_memory is only supported on CUDA. On MPS/CPU, use regular allocation.
+        from minisgl.platforms import Platform
+
+        if Platform.is_cuda():
+            self.cached_ones_cpu: torch.Tensor = torch.tensor(
+                [], dtype=torch.int32, pin_memory=True
+            )
+        else:
+            self.cached_ones_cpu: torch.Tensor = torch.tensor([], dtype=torch.int32)
         # for cuda graph
         self.capture_bs: List[int] = []
         self.max_graph_bs = 0
@@ -176,7 +184,13 @@ class FlashInferBackend(BaseAttnBackend):
             return self.cached_ones_cpu[:bs]
         # padding to next pow of 2
         next_len = _next_power_of_2(bs)
-        self.cached_ones_cpu = torch.ones(next_len, dtype=torch.int32, pin_memory=True)
+        # pin_memory is only supported on CUDA. On MPS/CPU, use regular allocation.
+        from minisgl.platforms import Platform
+
+        if Platform.is_cuda():
+            self.cached_ones_cpu = torch.ones(next_len, dtype=torch.int32, pin_memory=True)
+        else:
+            self.cached_ones_cpu = torch.ones(next_len, dtype=torch.int32)
         return self.cached_ones_cpu[:bs]
 
     def forward(
@@ -197,7 +211,12 @@ class FlashInferBackend(BaseAttnBackend):
         seqlens_k = [req.device_len for req in reqs]
         cached_lens = [req.cached_len for req in reqs]
         max_seqlen_q = max(seqlens_q)
-        cpu_kwargs = {"device": "cpu", "dtype": torch.int32, "pin_memory": True}
+        # pin_memory is only supported on CUDA. On MPS/CPU, use regular allocation.
+        from minisgl.platforms import Platform
+
+        cpu_kwargs = {"device": "cpu", "dtype": torch.int32}
+        if Platform.is_cuda():
+            cpu_kwargs["pin_memory"] = True
 
         device = self.device
         seq_len_cpu = torch.tensor(seqlens_k, **cpu_kwargs)

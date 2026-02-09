@@ -41,8 +41,15 @@ def mem_GB(size: int) -> str:
     return f"{size / (1024**3):.2f} GiB"
 
 
+from minisgl.platforms import Platform
+
+
 def get_free_memory(device: torch.device) -> int:
-    return torch.cuda.mem_get_info(device)[0]
+    if Platform.is_cuda():
+        return torch.cuda.mem_get_info(device)[0]
+    if Platform.is_mps():
+        return torch.mps.recommended_max_memory() - torch.mps.driver_allocated_memory()
+    return 64 * 1024**3
 
 
 class GraphRunner:
@@ -59,6 +66,9 @@ class GraphRunner:
         vocab_size: int,
         dummy_req: Req,
     ) -> None:
+        if not Platform.is_cuda():
+            cuda_graph_max_bs = 0
+
         cuda_graph_bs = _determine_cuda_graph_bs(
             cuda_graph_bs=cuda_graph_bs,
             cuda_graph_max_bs=cuda_graph_max_bs,
@@ -74,7 +84,7 @@ class GraphRunner:
 
     def _capture_graphs(self, max_seq_len: int, vocab_size: int, model: BaseLLMModel):
         graph_map: Dict[int, torch.cuda.CUDAGraph] = {}
-        if self.max_graph_bs == 0:
+        if self.max_graph_bs == 0 or not Platform.is_cuda():
             logger.info_rank0("CUDA graph is disabled.")
             return graph_map
 

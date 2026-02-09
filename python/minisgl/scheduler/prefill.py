@@ -55,8 +55,8 @@ class PrefillAdder:
         if cached_len > 0:  # NOTE: set the cached part
             device_ids = self.table_manager.token_pool[table_idx][:cached_len]
             page_entry = self.table_manager.page_table[table_idx][:cached_len]
-            device_ids.copy_(req.input_ids[:cached_len].pin_memory(), non_blocking=True)
-            page_entry.copy_(match_indices)
+            device_ids.copy_(req.input_ids[:cached_len].to(device_ids.device, non_blocking=True))
+            page_entry.copy_(match_indices.to(page_entry.device, non_blocking=True))
 
         return handle, table_idx
 
@@ -76,7 +76,7 @@ class PrefillAdder:
         # NOTE: update the tokens ids only; new pages will be allocated in the scheduler
         _slice = slice(cached_len, cached_len + chunk_size)
         device_ids = self.table_manager.token_pool[table_idx][_slice]
-        device_ids.copy_(pending_req.input_ids[_slice].pin_memory(), non_blocking=True)
+        device_ids.copy_(pending_req.input_ids[_slice].to(device_ids.device, non_blocking=True))
         return CLS(
             input_ids=pending_req.input_ids[: cached_len + chunk_size],
             table_idx=table_idx,

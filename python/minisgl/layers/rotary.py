@@ -32,9 +32,93 @@ class RotaryEmbedding(StateLessOP):
         self._cos_sin_cache = torch.cat((cos, sin), dim=-1)
         assert self.head_size in [64, 128, 256, 512]
 
-        from flashinfer import apply_rope_with_cos_sin_cache_inplace
+        if torch.cuda.is_available():
+            try:
+                from flashinfer import apply_rope_with_cos_sin_cache_inplace  # type: ignore
 
-        self.apply_rope_with_cos_sin_cache_inplace = apply_rope_with_cos_sin_cache_inplace
+                self.apply_rope_with_cos_sin_cache_inplace = apply_rope_with_cos_sin_cache_inplace
+            except ImportError:
+                # FlashInfer not available, use fallback
+                self.apply_rope_with_cos_sin_cache_inplace = self._apply_rope_fallback
+        else:
+            self.apply_rope_with_cos_sin_cache_inplace = self._apply_rope_fallback
+
+    def _apply_rope_fallback(
+        self,
+        positions: torch.Tensor,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        head_size: int,
+        cos_sin_cache: torch.Tensor,
+        is_neox: bool = False,
+    ):
+        # Fallback implementation of RoPE
+        # query: [num_tokens, num_heads, head_size]
+        # cos_sin_cache: [max_pos, 2 * head_size]
+        # positions: [num_tokens]
+
+        # Extract cos and sin
+        rot_dim = cos_sin_cache.shape[-1] // 2
+
+        # Ensure positions tensor has correct shape and type for indexing
+        positions = positions.long()
+
+        # Handle potential index out of bounds by clamping
+        max_pos = cos_sin_cache.shape[0] - 1
+        positions = torch.clamp(positions, 0, max_pos)
+
+        cos = cos_sin_cache[positions, :rot_dim]  # [num_tokens, rot_dim]
+        sin = cos_sin_cache[positions, rot_dim:]  # [num_tokens, rot_dim]
+
+        cos = cos.unsqueeze(1)  # [num_tokens, 1, rot_dim]
+        sin = sin.unsqueeze(1)  # [num_tokens, 1, rot_dim]
+
+        def rotate_half(x):
+            x1 = x[..., : x.shape[-1] // 2]
+            x2 = x[..., x.shape[-1] // 2 :]
+            return torch.cat((-x2, x1), dim=-1)
+
+        # Apply to query and key
+        # Assuming head_size == rot_dim for now (common case)
+        # If head_size > rot_dim, we only rotate the first rot_dim elements
+
+        q_embed = query[..., :rot_dim]
+        k_embed = key[..., :rot_dim]
+
+        # Handle case where rot_dim equals head_size to avoid dimension issues
+        if rot_dim == query.shape[-1]:
+            # No pass-through dimensions, just update directly
+            q_embed = (q_embed * cos) + (rotate_half(q_embed) * sin)
+            k_embed = (k_embed * cos) + (rotate_half(k_embed) * sin)
+            query.copy_(q_embed)
+            key.copy_(k_embed)
+            return query, key
+        else:
+            q_pass = query[..., rot_dim:]
+            k_pass = key[..., rot_dim:]
+
+        q_embed = (q_embed * cos) + (rotate_half(q_embed) * sin)
+        k_embed = (k_embed * cos) + (rotate_half(k_embed) * sin)
+
+        if q_embed.dim() == 2:
+            q_embed = q_embed.unsqueeze(1)
+            k_embed = k_embed.unsqueeze(1)
+        if q_pass.dim() == 2:
+            q_pass = q_pass.unsqueeze(1)
+            k_pass = k_pass.unsqueeze(1)
+
+        if q_embed.shape[:-1] == q_pass.shape[:-1]:
+            query.copy_(torch.cat((q_embed, q_pass), dim=-1))
+            key.copy_(torch.cat((k_embed, k_pass), dim=-1))
+        else:
+            query_result = torch.zeros_like(query)
+            key_result = torch.zeros_like(key)
+            query_result[..., : q_embed.shape[-1]] = q_embed
+            key_result[..., : k_embed.shape[-1]] = k_embed
+            query.copy_(query_result)
+            key.copy_(key_result)
+
+        return query, key
 
     def forward(
         self,
@@ -42,13 +126,16 @@ class RotaryEmbedding(StateLessOP):
         query: torch.Tensor,
         key: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        self.apply_rope_with_cos_sin_cache_inplace(
+        result = self.apply_rope_with_cos_sin_cache_inplace(
             positions=positions,
             query=query,
             key=key,
             head_size=self.head_size,
             cos_sin_cache=self._cos_sin_cache,
         )
+        # Handle case where _apply_rope_fallback returns tuple
+        if result is not None and isinstance(result, tuple):
+            return result
         return query, key
 
 

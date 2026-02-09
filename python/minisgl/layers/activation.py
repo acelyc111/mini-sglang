@@ -7,7 +7,10 @@ if TYPE_CHECKING:
 
 
 def silu_and_mul(x: torch.Tensor) -> torch.Tensor:
-    from flashinfer import silu_and_mul
+    try:
+        from flashinfer import silu_and_mul
+    except ImportError:
+        from minisgl.mock_ops import silu_and_mul
 
     return silu_and_mul(x)
 

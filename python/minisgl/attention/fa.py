@@ -73,7 +73,12 @@ class FlashAttentionBackend(BaseAttnBackend):
         cached_lens = [req.cached_len for req in reqs]
         max_seqlen_k = max(seqlens_k)
         max_seqlen_q = max(seqlens_q)
-        cpu_kwargs = {"device": "cpu", "dtype": torch.int32, "pin_memory": True}
+        # pin_memory is only supported on CUDA. On MPS/CPU, use regular allocation.
+        from minisgl.platforms import Platform
+
+        cpu_kwargs = {"device": "cpu", "dtype": torch.int32}
+        if Platform.is_cuda():
+            cpu_kwargs["pin_memory"] = True
 
         device = self.kvcache.device
         cache_seqlens = torch.tensor(seqlens_k, **cpu_kwargs)
