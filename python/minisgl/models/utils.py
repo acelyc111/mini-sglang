@@ -13,10 +13,12 @@ from minisgl.layers import (
     silu_and_mul,
 )
 from minisgl.models import ModelConfig
-from minisgl.utils import nvtx_annotate
+from minisgl.utils import init_logger, nvtx_annotate
 
 if TYPE_CHECKING:
     import torch
+
+logger = init_logger(__name__)
 
 
 class GatedMLP(BaseOP):
@@ -58,6 +60,7 @@ class RopeAttn(BaseOP):
         has_qk_norm: bool = False,
     ):
         head_dim = config.head_dim
+        self.layer_id = layer_id
         self.qkv_proj = LinearQKVMerged(
             hidden_size=config.hidden_size,
             head_dim=config.head_dim,
@@ -89,10 +92,19 @@ class RopeAttn(BaseOP):
 
     @nvtx_annotate("MHA")
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        def _log(stage: str, t: torch.Tensor):
+            if self.layer_id in [0, 1]:
+                logger.info_rank0(f"Layer {self.layer_id} RopeAttn {stage}: shape={t.shape}")
+
+        _log("input", x)
         qkv = self.qkv_proj.forward(x)
         del x
+        _log("after qkv_proj", qkv)
         o = self.attn.forward(qkv)
-        return self.o_proj.forward(o)
+        _log("after attn", o)
+        out = self.o_proj.forward(o)
+        _log("after o_proj", out)
+        return out
 
 
 __all__ = ["GatedMLP", "RopeAttn"]
