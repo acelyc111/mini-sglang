@@ -10,6 +10,14 @@ from .base import StateLessOP
 
 
 class RotaryEmbedding(StateLessOP):
+    """
+    Rotary Positional Embedding (RoPE).
+
+    This class implements RoPE, a method for injecting positional information into
+    token embeddings. It precomputes cosine and sine values for efficiency and
+    uses FlashInfer for optimized application during the forward pass.
+    """
+
     def __init__(
         self,
         head_size: int,
@@ -18,18 +26,47 @@ class RotaryEmbedding(StateLessOP):
         base: float,
         post_process: None | Callable[[torch.Tensor], torch.Tensor] = None,
     ) -> None:
+        """
+        Initialize the RotaryEmbedding layer.
+
+        Args:
+            head_size: The size of the attention heads.
+            rotary_dim: The dimension used for rotary embeddings. Must be equal to head_size.
+            max_position_embeddings: The maximum sequence length supported.
+            base: The base value for frequency calculation.
+            post_process: Optional function to transform inverse frequencies (e.g., for RoPE scaling).
+        """
         super().__init__()
         self.head_size = head_size
+        # Currently, the implementation assumes rotary_dim equals head_size
         assert rotary_dim == head_size
+
+        # Calculate inverse frequencies: 1 / (base ** (2i / d))
+        # This creates a geometric sequence of frequencies
         inv_freq = 1.0 / (base ** (torch.arange(0, rotary_dim, 2, dtype=torch.float) / rotary_dim))
+
+        # Apply optional post-processing to inverse frequencies (e.g., for Llama 3 RoPE scaling)
         if post_process is not None:
             inv_freq = post_process(inv_freq)
+
+        # Generate position indices [0, 1, ..., max_position_embeddings - 1]
         t = torch.arange(max_position_embeddings, dtype=torch.float)
+
+        # Compute the angles (frequencies) by taking the outer product of positions and inverse frequencies
+        # shape: (max_position_embeddings, rotary_dim // 2)
         freqs = torch.einsum("i,j -> ij", t, inv_freq)
+
+        # Compute cosine and sine of the angles
         cos = freqs.cos()
         sin = freqs.sin()
-        # buffer, so don't load/save
+
+        # Concatenate cosine and sine values to create the cache
+        # The cache structure is expected by FlashInfer
+        # shape: (max_position_embeddings, rotary_dim)
+        # buffer, so don't load/save to state_dict
         self._cos_sin_cache = torch.cat((cos, sin), dim=-1)
+
+        # FlashInfer currently supports specific head sizes
         assert self.head_size in [64, 128, 256, 512]
 
         from flashinfer import apply_rope_with_cos_sin_cache_inplace
@@ -42,6 +79,17 @@ class RotaryEmbedding(StateLessOP):
         query: torch.Tensor,
         key: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Apply rotary positional embeddings to query and key tensors.
+
+        Args:
+            positions: Tensor containing position indices for each token.
+            query: Query tensor to be modified in-place.
+            key: Key tensor to be modified in-place.
+
+        Returns:
+            A tuple containing the modified query and key tensors.
+        """
         self.apply_rope_with_cos_sin_cache_inplace(
             positions=positions,
             query=query,
