@@ -45,15 +45,24 @@ class AttentionLayer(StateLessOP):
         self.k_norm = k_norm
 
     def forward(self, qkv: torch.Tensor) -> torch.Tensor:
+        # 获取当前的全局上下文
         ctx = get_global_ctx()
+        # 从上下文的 batch 中获取注意力元数据
         metadata = ctx.batch.attn_metadata
+        # 将输入张量 qkv 切分为 query, key, value 张量
         q, k, v = qkv.split([self.qo_attn_dim, self.kv_attn_dim, self.kv_attn_dim], dim=-1)
+        # 如果定义了 q_norm，则对 query 张量进行原地归一化
         if self.q_norm is not None:
             self.q_norm.forward_inplace(q.view(-1, self.num_qo_heads, self.head_dim))
+        # 如果定义了 k_norm，则对 key 张量进行原地归一化
         if self.k_norm is not None:
             self.k_norm.forward_inplace(k.view(-1, self.num_kv_heads, self.head_dim))
+        # 如果启用了 rotary (RoPE)，则对 query 和 key 应用旋转位置编码
         if self.rotary:
             q, k = self.rotary.forward(metadata.positions, q, k)
+        # 将 query 张量重塑为 (batch_size * seq_len, num_heads, head_dim)
         q = q.view(-1, self.num_qo_heads, self.head_dim)
+        # 使用注意力后端的 forward 方法计算注意力输出
         o = ctx.attn_backend.forward(q, k, v, self.layer_id, ctx.batch)
+        # 将输出重塑回 (batch_size * seq_len, hidden_dim) 并返回
         return o.view(-1, self.qo_attn_dim)
