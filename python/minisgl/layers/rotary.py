@@ -117,16 +117,19 @@ def _get_rope(
             high_freq_factor: float = rope_scaling["high_freq_factor"]
             original_max_position: int = rope_scaling["original_max_position_embeddings"]
 
+            # 对 RoPE 频率 `inv_freq` 做调整
             def post_process(inv_freq: torch.Tensor) -> torch.Tensor:
                 # no smooth if low_freq_factor == high_freq_factor
                 wave_len = 2 * math.pi / inv_freq
                 if low_freq_factor == high_freq_factor:
+                    # 直接在分界处“硬切换”，即波长小于阈值的保持原频率，大于阈值的按 scaling_factor 缩放
                     return torch.where(
                         wave_len < original_max_position / high_freq_factor,
                         inv_freq,
                         inv_freq / scaling_factor,
                     )
 
+                # 若低频/高频因子不同，做平滑过渡。使得对应的 RoPE 旋转角度变化更连续，改善长上下文外推时的稳定性与质量
                 delta = high_freq_factor - low_freq_factor
                 smooth = (original_max_position / wave_len - low_freq_factor) / delta
                 smooth = torch.clamp(smooth, 0, 1)
